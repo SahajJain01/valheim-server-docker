@@ -18,12 +18,25 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/golang/glog"
 )
+
+type PatternAction struct {
+	filter string
+	cmd    string
+}
+
+type RegexpAction struct {
+	filter *regexp.Regexp
+	cmd    string
+}
 
 func main() {
 	envMatch := flag.String("env-match", "VALHEIM_LOG_FILTER_MATCH", "Valheim match filter env varname prefix")
@@ -32,18 +45,20 @@ func main() {
 	envContains := flag.String("env-contains", "VALHEIM_LOG_FILTER_CONTAINS", "Valheim contains filter varname prefix")
 	envRegexp := flag.String("env-regexp", "VALHEIM_LOG_FILTER_REGEXP", "Valheim regexp filter varname prefix")
 	envFilterEmpty := flag.String("env-empty", "VALHEIM_LOG_FILTER_EMPTY", "Valheim empty-line filter varname")
+	envFilterUTF8 := flag.String("env-utf8", "VALHEIM_LOG_FILTER_UTF8", "Valheim UTF-8 filter varname")
 	flag.Parse()
 
-	if *envMatch == "" || *envPrefix == "" || *envSuffix == "" || *envContains == "" || *envRegexp == "" || *envFilterEmpty == "" {
+	if *envMatch == "" || *envPrefix == "" || *envSuffix == "" || *envContains == "" || *envRegexp == "" || *envFilterEmpty == "" || *envFilterUTF8 == "" {
 		flag.PrintDefaults()
 		os.Exit(1)
 	}
-	var matchFilters []string
-	var prefixFilters []string
-	var suffixFilters []string
-	var containsFilters []string
-	var regexpFilters []*regexp.Regexp
+	var matchFilters []PatternAction
+	var prefixFilters []PatternAction
+	var suffixFilters []PatternAction
+	var containsFilters []PatternAction
+	var regexpFilters []RegexpAction
 	filterEmpty := false
+	filterUTF8 := false
 
 	glog.V(1).Info("Configuring Valheim server log filter")
 	for _, e := range os.Environ() {
@@ -53,24 +68,48 @@ func main() {
 		if len(varValue) == 0 {
 			continue
 		}
+		cmd, present := os.LookupEnv("ON_" + envVar)
 		if strings.HasPrefix(envVar, *envMatch) {
-			glog.V(2).Infof("Removing log lines matching '%s'", varValue)
-			matchFilters = append(matchFilters, varValue)
+			if present {
+				glog.V(2).Infof("On log lines matching '%s' running '%s'", varValue, cmd)
+			} else {
+				glog.V(2).Infof("Removing log lines matching '%s'", varValue)
+			}
+			matchFilters = append(matchFilters, PatternAction{varValue, cmd})
 		} else if strings.HasPrefix(envVar, *envPrefix) {
-			glog.V(2).Infof("Removing log lines starting with '%s'", varValue)
-			prefixFilters = append(prefixFilters, varValue)
+			if present {
+				glog.V(2).Infof("On log lines starting with '%s' running '%s'", varValue, cmd)
+			} else {
+				glog.V(2).Infof("Removing log lines starting with '%s'", varValue)
+			}
+			prefixFilters = append(prefixFilters, PatternAction{varValue, cmd})
 		} else if strings.HasPrefix(envVar, *envSuffix) {
-			glog.V(2).Infof("Removing log lines ending with '%s'", varValue)
-			suffixFilters = append(suffixFilters, varValue)
+			if present {
+				glog.V(2).Infof("On log lines ending with '%s' running '%s'", varValue, cmd)
+			} else {
+				glog.V(2).Infof("Removing log lines ending with '%s'", varValue)
+			}
+			suffixFilters = append(suffixFilters, PatternAction{varValue, cmd})
 		} else if strings.HasPrefix(envVar, *envContains) {
-			glog.V(2).Infof("Removing log lines containing '%s'", varValue)
-			containsFilters = append(containsFilters, varValue)
+			if present {
+				glog.V(2).Infof("On log lines containing '%s' running '%s'", varValue, cmd)
+			} else {
+				glog.V(2).Infof("Removing log lines containing '%s'", varValue)
+			}
+			containsFilters = append(containsFilters, PatternAction{varValue, cmd})
 		} else if strings.HasPrefix(envVar, *envRegexp) {
-			glog.V(2).Infof("Removing log lines matching regexp '%s'", varValue)
-			regexpFilters = append(regexpFilters, regexp.MustCompile(varValue))
+			if present {
+				glog.V(2).Infof("On log lines matching regexp '%s' running '%s", varValue, cmd)
+			} else {
+				glog.V(2).Infof("Removing log lines matching regexp '%s'", varValue)
+			}
+			regexpFilters = append(regexpFilters, RegexpAction{regexp.MustCompile(varValue), cmd})
 		} else if envVar == *envFilterEmpty {
 			filterEmpty = varValue == "true"
 			glog.V(2).Infof("Removing empty log lines: %t", filterEmpty)
+		} else if envVar == *envFilterUTF8 {
+			filterUTF8 = varValue == "true"
+			glog.V(2).Infof("Removing invalid UTF-8 chars: %t", filterUTF8)
 		}
 	}
 	glog.Flush()
@@ -78,62 +117,122 @@ func main() {
 	scanner := bufio.NewScanner(os.Stdin)
 Input:
 	for scanner.Scan() {
+		logLine := scanner.Text()
 		if glog.V(10) {
-			glog.Infof("Processing line '%s'", scanner.Text())
+			glog.Infof("Processing line '%s'", logLine)
 		}
-		if filterEmpty && len(scanner.Text()) == 0 {
-			glog.V(5).Info("Skipping empty line")
+		if filterEmpty && len(logLine) == 0 {
+			if glog.V(5) {
+				glog.Info("Skipping empty line")
+			}
 			continue
 		}
-		for _, filter := range matchFilters {
-			if scanner.Text() == filter {
-				if glog.V(5) {
-					glog.Infof("Line matched '%s'", filter)
+		if filterUTF8 && !utf8.ValidString(logLine) {
+			if glog.V(5) {
+				glog.Info("Removing non UTF-8 character(s)")
+			}
+			v := make([]rune, 0, len(logLine))
+			for i, r := range logLine {
+				if r == utf8.RuneError {
+					_, size := utf8.DecodeRuneInString(logLine[i:])
+					if size == 1 {
+						continue
+					}
 				}
-				continue Input
+				v = append(v, r)
+			}
+			logLine = string(v)
+		}
+		for _, action := range matchFilters {
+			if logLine == action.filter {
+				if glog.V(5) {
+					glog.Infof("Line matched '%s'", action.filter)
+				}
+				if action.cmd == "" {
+					continue Input
+				} else {
+					go runHook(action.cmd, logLine)
+				}
 			}
 		}
-		for _, filter := range prefixFilters {
-			if strings.HasPrefix(scanner.Text(), filter) {
+		for _, action := range prefixFilters {
+			if strings.HasPrefix(logLine, action.filter) {
 				if glog.V(5) {
-					glog.Infof("Line matched prefix filter '%s'", filter)
+					glog.Infof("Line matched prefix filter '%s'", action.filter)
 				}
-				continue Input
+				if action.cmd == "" {
+					continue Input
+				} else {
+					go runHook(action.cmd, logLine)
+				}
 			}
 		}
-		for _, filter := range suffixFilters {
-			if strings.HasSuffix(scanner.Text(), filter) {
+		for _, action := range suffixFilters {
+			if strings.HasSuffix(logLine, action.filter) {
 				if glog.V(5) {
-					glog.Infof("Line matched suffix filter '%s'", filter)
+					glog.Infof("Line matched suffix filter '%s'", action.filter)
 				}
-				continue Input
+				if action.cmd == "" {
+					continue Input
+				} else {
+					go runHook(action.cmd, logLine)
+				}
 			}
 		}
-		for _, filter := range containsFilters {
-			if strings.Contains(scanner.Text(), filter) {
+		for _, action := range containsFilters {
+			if strings.Contains(logLine, action.filter) {
 				if glog.V(5) {
-					glog.Infof("Line contains filter '%s'", filter)
+					glog.Infof("Line contains filter '%s'", action.filter)
 				}
-				continue Input
+				if action.cmd == "" {
+					continue Input
+				} else {
+					go runHook(action.cmd, logLine)
+				}
 			}
 		}
-		for _, filter := range regexpFilters {
-			if filter.MatchString(scanner.Text()) {
+		for _, action := range regexpFilters {
+			if action.filter.MatchString(logLine) {
 				if glog.V(5) {
-					glog.Infof("Line matched regexp filter '%s'", filter)
+					glog.Infof("Line matched regexp filter '%s'", action.filter)
 				}
-				continue Input
+				if action.cmd == "" {
+					continue Input
+				} else {
+					go runHook(action.cmd, logLine)
+				}
 			}
 		}
 		if glog.V(8) {
-			glog.Info("Line matched no filters")
+			glog.Info("Line matched no removal filters")
 		}
 		glog.Flush()
-		fmt.Println(scanner.Text())
+		fmt.Println(logLine)
 	}
 
 	if scanner.Err() != nil {
 		glog.Error(scanner.Err())
 	}
 	glog.Flush()
+}
+
+func runHook(cmd string, logLine string) {
+	glog.Infof("Running hook %q for %q", cmd, logLine)
+	subProcess := exec.Command("/bin/bash", "-c", cmd)
+	stdin, err := subProcess.StdinPipe()
+	if err != nil {
+		glog.Error(err)
+	}
+
+	subProcess.Stdout = os.Stdout
+	subProcess.Stderr = os.Stderr
+
+	if err = subProcess.Start(); err != nil {
+		glog.Error(err)
+	}
+	glog.Flush()
+
+	io.WriteString(stdin, logLine+"\n")
+	stdin.Close()
+	subProcess.Wait()
 }

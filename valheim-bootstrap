@@ -21,10 +21,27 @@ fi
 # check if we are supposed to wipe our data directories
 if [ "$DEBUG_START_FRESH" = true ]; then
     warn "Wiping all data directories (DEBUG_START_FRESH: $DEBUG_START_FRESH)"
-    rm -rf "$valheim_download_path"
-    rm -rf "$valheim_install_path"
+    rm -rf "/opt/valheim/*"
+fi
+
+# check if we are supposed to reinstall ValheimPlus
+if [ "$DEBUG_REINSTALL_VALHEIM_PLUS" = true ]; then
+    warn "Reinstalling ValheimPlus mod (DEBUG_REINSTALL_VALHEIM_PLUS: $DEBUG_REINSTALL_VALHEIM_PLUS)"
     rm -rf "$vp_download_path"
     rm -rf "$vp_install_path"
+fi
+
+# check if we are supposed to reinstall BepInEx
+if [ "$DEBUG_REINSTALL_BEPINEX" = true ]; then
+    warn "Reinstalling BepInEx mod (DEBUG_REINSTALL_BEPINEX: $DEBUG_REINSTALL_BEPINEX)"
+    rm -rf "$bepinex_download_path"
+    rm -rf "$bepinex_install_path"
+fi
+
+# Output image commit version on startup
+if [ -f "$git_commit_file" ]; then
+    commit=$(< "$git_commit_file")
+    debug "Running commit $commit"
 fi
 
 
@@ -32,14 +49,33 @@ fi
 mkdir -p "$valheim_download_path"
 mkdir -p "$valheim_install_path"
 
+# Mod support
+if [ "$VALHEIM_PLUS" = true ] && [ "$BEPINEX" = true ]; then
+    error "Configuration error: enable ValheimPlus or BepInEx mod support but not both - aborting startup"
+    supervisorctl shutdown
+    exit 1
+fi
+
 if [ "$VALHEIM_PLUS" = true ]; then
     mkdir -p "$vp_download_path"
     mkdir -p "$vp_install_path"
     if [ -d "$vp_config_path" ]; then
         write_valheim_plus_config
+        write_bepinex_config "$vp_config_path" "$vp_install_path/BepInEx/plugins"
     fi
 fi
 
+if [ "$BEPINEX" = true ]; then
+    mkdir -p "$bepinex_download_path"
+    mkdir -p "$bepinex_install_path"
+    if [ -d "$bepinex_config_path" ]; then
+        write_bepinex_config "$bepinex_config_path" "$bepinex_install_path/BepInEx/plugins"
+    fi
+fi
+
+# Write server's adminlist.txt / bannedlist.txt
+write_adminlist
+write_bannedlist
 
 # Create crontabs
 crontab=$(mktemp)
@@ -55,7 +91,11 @@ fi
 
 if [ -n "$RESTART_CRON" ]; then
     debug "Creating cron to restart valheim-server using schedule $RESTART_CRON"
-    echo "$RESTART_CRON $cmd_supervisorctl restart valheim-server" >> "$crontab"
+    if [ "$RESTART_IF_IDLE" = true ]; then
+        echo "$RESTART_CRON $cmd_valheim_is_idle && $cmd_supervisorctl restart valheim-server" >> "$crontab"
+    else
+        echo "$RESTART_CRON $cmd_supervisorctl restart valheim-server" >> "$crontab"
+    fi
 else
     debug "Environment variable RESTART_CRON is empty - no automatic valheim-server restart scheduled"
 fi
@@ -94,8 +134,6 @@ fi
 
 
 # Start all services
-supervisorctl start syslogd
-supervisorctl start crond
 supervisorctl start valheim-updater
 supervisorctl start valheim-backup
 

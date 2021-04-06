@@ -12,38 +12,49 @@ Valheim Server in a Docker Container (with [ValheimPlus](#valheimplus) support)
 * [Basic Docker Usage](#basic-docker-usage)
 * [Environment Variables](#environment-variables)
 	* [Log filters](#log-filters)
+		* [Log filter event hooks](#log-filter-event-hooks)
+			* [Discord log filter event hook example](#discord-log-filter-event-hook-example)
 	* [Event hooks](#event-hooks)
 		* [Event hook examples](#event-hook-examples)
 			* [Install extra packages](#install-extra-packages)
 			* [Copy backups to another location](#copy-backups-to-another-location)
 			* [Notify on Discord](#notify-on-discord)
-	* [ValheimPlus config from Environment Variables](#valheimplus-config-from-environment-variables)
+	* [Mod config from Environment Variables](#mod-config-from-environment-variables)
 * [System requirements](#system-requirements)
 * [Deployment](#deployment)
 	* [Deploying with Docker and systemd](#deploying-with-docker-and-systemd)
 	* [Deploying with docker-compose](#deploying-with-docker-compose)
 	* [Deploying to Kubernetes](#deploying-to-kubernetes)
 	* [Deploying to AWS ECS](#deploying-to-aws-ecs)
+	* [Deploying to Nomad](#deploying-to-nomad)
 * [Updates](#updates)
 * [Backups](#backups)
+  * [Manual backup](#manual-backup)
 * [Finding Your Server](#finding-your-server)
 	* [In-game](#in-game)
+		* [Joining Directly via Hostname/IP](#joining-directly-via-hostnameip)
 	* [Steam Server Browser](#steam-server-browser)
 	* [Steam Server Favorites & LAN Play](#steam-server-favorites--lan-play)
 * [Admin Commands](#admin-commands)
 * [Supervisor](#supervisor)
   * [Supervisor API](#supervisor-api)
 * [Status web server](#status-web-server)
-* [ValheimPlus](#valheimplus)
-	* [Updates](#updates-1)
-	* [Configuration](#configuration)
-		* [Server data rate](#server-data-rate)
-		* [Disable server password](#disable-server-password)
+* [Modding](#modding)
+  * [BepInExPack Valheim](#bepinexpack-valheim)
+    * [Configuration](#configuration)
+  * [ValheimPlus](#valheimplus)
+    * [Updates](#updates-1)
+    * [Configuration](#configuration-1)
+      * [Server data rate](#server-data-rate)
+      * [Disable server password](#disable-server-password)
 * [Changing startup CMD in Portainer](#changing-startup-cmd-in-portainer)
 * [Synology Help](#synology-help)
 	* [First install](#first-install)
 	* [Updating the container image to the latest version](#updating-the-container-image-to-the-latest-version)
 		* [Error after download of new container image](#error-after-download-of-new-container-image)
+* [QNAP NAS Help](#qnap-nas-help)
+	* [Creating container](#creating-container)
+	* [Updating image](#updating-image)
 <!-- vim-markdown-toc -->
 
 
@@ -96,6 +107,7 @@ Without it you will see a message `Warning: failed to set thread priority` in th
 
 
 # Environment Variables
+**All variable names and values are case-sensitive!**
 | Name | Default | Purpose |
 |----------|----------|-------|
 | `SERVER_NAME` | `My Server` | Name that will be shown in the server browser |
@@ -104,9 +116,12 @@ Without it you will see a message `Warning: failed to set thread priority` in th
 | `SERVER_PASS` | `secret` | Password for logging into the server - min. 5 characters! |
 | `SERVER_PUBLIC` | `true` | Whether the server should be listed in the server browser (`true`) or not (`false`) |
 | `SERVER_ARGS` |  | Additional Valheim server CLI arguments |
+| `ADMINLIST_IDS` |  | Space separated list of admin SteamIDs. Overrides any existing adminlist.txt entries! |
+| `BANNEDLIST_IDS` |  | Space separated list of banned SteamIDs. Overrides any existing bannedlist.txt entries! |
 | `UPDATE_CRON` | `*/15 * * * *` | [Cron schedule](https://en.wikipedia.org/wiki/Cron#Overview) for update checks (disabled if set to an empty string or if the legacy `UPDATE_INTERVAL` is set) |
 | `UPDATE_IF_IDLE` | `true` | Only run update check if no players are connected to the server (`true` or `false`) |
 | `RESTART_CRON` | `0 5 * * *` | [Cron schedule](https://en.wikipedia.org/wiki/Cron#Overview) for server restarts (disabled if set to an empty string) |
+| `RESTART_IF_IDLE` | `true` | Only run daily restart if no players are connected to the server (`true` or `false`) |
 | `TZ` | `Etc/UTC` | Container [time zone](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones) |
 | `BACKUPS` | `true` | Whether the server should create periodic backups (`true` or `false`) |
 | `BACKUPS_CRON` | `0 * * * *` | [Cron schedule](https://en.wikipedia.org/wiki/Cron#Overview) for world backups (disabled if set to an empty string or if the legacy `BACKUPS_INTERVAL` is set) |
@@ -114,16 +129,22 @@ Without it you will see a message `Warning: failed to set thread priority` in th
 | `BACKUPS_MAX_AGE` | `3` | Age in days after which old backups are flushed |
 | `PERMISSIONS_UMASK` | `022` | [Umask](https://en.wikipedia.org/wiki/Umask) to use for backups, config files and directories |
 | `STEAMCMD_ARGS` | `validate` | Additional steamcmd CLI arguments |
-| `VALHEIM_PLUS` | `false` | Whether [ValheimPlus](https://github.com/valheimPlus/ValheimPlus) mod should be loaded (config in `/config/valheimplus`) |
-| `SUPERVISOR_HTTP` | `false` | Turn on supervisor's http server on port `:9001` |
+| `VALHEIM_PLUS` | `false` | Whether [ValheimPlus](https://github.com/valheimPlus/ValheimPlus) mod should be loaded (config in `/config/valheimplus`, additional plugins in `/config/valheimplus/plugins`). Can not be used together with `BEPINEX`. |
+| `BEPINEX` | `false` | Whether [BepInExPack Valheim](https://valheim.thunderstore.io/package/denikson/BepInExPack_Valheim/) mod should be loaded (config in `/config/bepinex`, plugins in `/config/bepinex/plugins`). Can not be used together with `VALHEIM_PLUS`. |
+| `SUPERVISOR_HTTP` | `false` | Turn on supervisor's http server |
+| `SUPERVISOR_HTTP_PORT` | `9001` | Set supervisor's http server port |
 | `SUPERVISOR_HTTP_USER` | `admin` | Supervisor http server username |
 | `SUPERVISOR_HTTP_PASS` |  | Supervisor http server password. http server will not be started if password is not set! |
 | `STATUS_HTTP` | `false` | Turn on the status http server. Only useful on public servers (`SERVER_PUBLIC=true`). |
 | `STATUS_HTTP_PORT` | `80` | Status http server tcp port |
 | `STATUS_HTTP_CONF` | `/config/httpd.conf` | Path to the [busybox httpd config](https://git.busybox.net/busybox/tree/networking/httpd.c) |
 | `STATUS_HTTP_HTDOCS` | `/opt/valheim/htdocs` | Path to the status httpd htdocs where `status.json` is written |
+| `SYSLOG_REMOTE_HOST` |  | Remote syslog host or IP to send logs to |
+| `SYSLOG_REMOTE_PORT` | `514` | Remote syslog UDP port to send logs to |
+| `SYSLOG_REMOTE_AND_LOCAL` | `true` | When sending logs to a remote syslog server also log local |
 
 There are a few undocumented environment variables that could break things if configured wrong. They can be found in [`defaults`](defaults).
+
 
 ## Log filters
 Valheim server by default logs a lot of noise. These env variables allow users to remove unwanted lines from the log.
@@ -131,18 +152,12 @@ Valheim server by default logs a lot of noise. These env variables allow users t
 | Prefix | Default | Purpose |
 |----------|----------|-------|
 | `VALHEIM_LOG_FILTER_EMPTY` | `true` | Filter empty log lines |
+| `VALHEIM_LOG_FILTER_UTF8` | `true` | Filter invalid UTF-8 characters |
 | `VALHEIM_LOG_FILTER_MATCH` | ` ` | Filter log lines exactly matching |
 | `VALHEIM_LOG_FILTER_STARTSWITH` | `(Filename:` | Filter log lines starting with |
 | `VALHEIM_LOG_FILTER_ENDSWITH` |  | Filter log lines ending with |
 | `VALHEIM_LOG_FILTER_CONTAINS` |  | Filter log lines containing |
 | `VALHEIM_LOG_FILTER_REGEXP` |  | Filter log lines matching regexp |
-
-All environment variables except for `VALHEIM_LOG_FILTER_EMPTY` are prefixes. Meaning you can define multiple matches like so:
-```
--e VALHEIM_LOG_FILTER_STARTSWITH=foo \
--e VALHEIM_LOG_FILTER_STARTSWITH_BAR=bar \
--e VALHEIM_LOG_FILTER_STARTSWITH_SOMETHING_ELSE="some other filter"
-```
 
 The default filter removes:
 - Empty log lines
@@ -152,11 +167,46 @@ The default filter removes:
 - If ValheimPlus is turned on lines starting with `Fallback handler could not load library`
 
 
+### Log filter event hooks
+If an environment variable prefixed with `ON_` exists for an identically named log filter, instead of removing the log line the contents of the variable will be executed when the filter matches with the log line piped on stdin.
+
+| Prefix | Purpose |
+|----------|-------|
+| `ON_VALHEIM_LOG_FILTER_MATCH` | Run command hook on log lines exactly matching |
+| `ON_VALHEIM_LOG_FILTER_STARTSWITH` | Run command hook on log lines starting with |
+| `ON_VALHEIM_LOG_FILTER_ENDSWITH` | Run command hook on log lines ending with |
+| `ON_VALHEIM_LOG_FILTER_CONTAINS` | Run command hook on log lines containing |
+| `ON_VALHEIM_LOG_FILTER_REGEXP` | Run command hook on regexp match |
+
+All environment variables except for `VALHEIM_LOG_FILTER_EMPTY` and `VALHEIM_LOG_FILTER_UTF8` are prefixes. Meaning you can define multiple matches like so:
+```
+-e VALHEIM_LOG_FILTER_STARTSWITH=foo \
+-e VALHEIM_LOG_FILTER_STARTSWITH_BAR=bar \
+-e VALHEIM_LOG_FILTER_STARTSWITH_SOMETHING_ELSE="some other filter"
+-e VALHEIM_LOG_FILTER_CONTAINS_Connected="Got character ZDOID from"
+-e ON_VALHEIM_LOG_FILTER_CONTAINS_Connected="cat >> /tmp/character_login"
+```
+
+#### Discord log filter event hook example
+Sends a Discord message whenever a player spawns
+```
+-e DISCORD_WEBHOOK="https://discord.com/api/webhooks/8171522530..." \
+-e VALHEIM_LOG_FILTER_CONTAINS_Spawned="Got character ZDOID from" \
+-e ON_VALHEIM_LOG_FILTER_CONTAINS_Spawned='{ read l; l=${l//*ZDOID from /}; l=${l// :*/}; msg="Player $l spawned into the world"; curl -sfSL -X POST -H "Content-Type: application/json" -d "{\"username\":\"Valheim\",\"content\":\"$msg\"}" "$DISCORD_WEBHOOK"; }'
+```
+
+See [Notify on Discord](#notify-on-discord) below for proper quoting in env and compose files.
+
+If you are running ValheimPlus and this filter triggers twice, check [this ValheimPlus issue](https://github.com/valheimPlus/ValheimPlus/issues/318).
+The cause is a misconfigured `BepInEx.cfg` that causes all log lines to be duplicated.
+
+
 ## Event hooks
 The following environment variables can be populated to run commands whenever specific events happen.
 
 | Name | Default | Purpose |
 |----------|----------|-------|
+| `PRE_SUPERVISOR_HOOK` |  | Command to be executed before supervisord is run. Startup is blocked until this command returns. |
 | `PRE_BOOTSTRAP_HOOK` |  | Command to be executed before bootstrapping is done. Startup is blocked until this command returns. |
 | `POST_BOOTSTRAP_HOOK` |  | Command to be executed after bootstrapping is done and before the server or any services are started. Can be used to install additional packages or perform additional system setup. Startup is blocked until this command returns. |
 | `PRE_BACKUP_HOOK` |  | Command to be executed before a backup is created. The string `@BACKUP_FILE@` will be replaced by the full path of the future backup zip file. Backups are blocked until this command returns. See [Post backup hook](#post-backup-hook) for details. |
@@ -166,11 +216,16 @@ The following environment variables can be populated to run commands whenever sp
 | `PRE_START_HOOK` |  | Command to be executed before the first server start is performed by the valheim-updater. Current start is blocked until this command returns. |
 | `POST_START_HOOK` |  | Command to be executed after the first server start was performed by the valheim-updater. Future restarts and update checks are blocked until this command returns. |
 | `PRE_RESTART_HOOK` |  | Command to be executed before a server restart is performed by the valheim-updater. Current restart is blocked until this command returns. |
+| `PRE_SERVER_LISTENING_HOOK` |  | Command to be executed after the server runs, but before it's able to accept connections. The loop that checks connection status will be blocked until this command returns. |
+| `POST_SERVER_LISTENING_HOOK` |  | Command to be executed once the server is available for players to connect! The hook only fires after status is updated to `running`. |
 | `POST_RESTART_HOOK` |  | Command to be executed after a server restart was performed by the valheim-updater. Future restarts and update checks are blocked until this command returns. |
 | `PRE_SERVER_RUN_HOOK` |  | Command to be executed before the server is started. Server startup is blocked until this command returns. |
 | `POST_SERVER_RUN_HOOK` |  | Command to be executed after the server has finished running. Server shutdown is blocked until this command returns or a shutdown timeout is triggered after 29 seconds. |
 | `PRE_SERVER_SHUTDOWN_HOOK` |  | Command to be executed before the server is shut down. Server shutdown is blocked until this command returns. If `PRE_SERVER_SHUTDOWN_HOOK` holds the shutdown process for more than 90 seconds, the entire process will be hard-killed by `supervisord`. |
 | `POST_SERVER_SHUTDOWN_HOOK` |  | Command to be executed after the server has finished shutting down. |
+| `PRE_BEPINEX_CONFIG_HOOK` |  | Command to be executed before writing BepInEx.cfg. |
+| `POST_BEPINEX_CONFIG_HOOK` |  | Command to be executed after writing BepInEx.cfg. Can be used to write your own mod config using [`env2cfg`](#mod-config-from-environment-variables). |
+
 
 ### Event hook examples
 #### Install extra packages
@@ -215,23 +270,62 @@ DISCORD_MESSAGE=Starting Valheim server
 PRE_BOOTSTRAP_HOOK=curl -sfSL -X POST -H "Content-Type: application/json" -d "{\"username\":\"Valheim\",\"content\":\"$DISCORD_MESSAGE\"}" "$DISCORD_WEBHOOK"
 ```
 
+#### Notify on Matrix, inside an env_file
+Create an account for your bot, log in and join the room you want to post to. The room ID is noted in the room's settings.
+```
+MATRIX_BOT_SERVER=https://matrix...
+MATRIX_BOT_ROOM_ID=!...
+MATRIX_BOT_ACCESS_TOKEN=...
+PRE_RESTART_HOOK=curl -sfSL -X PUT -d "{\"msgtype\":\"m.notice\",\"body\":\"Valheim is being updated\"}" "$MATRIX_BOT_SERVER/_matrix/client/r0/rooms/$MATRIX_BOT_ROOM_ID/send/m.room.message/$(date +%s-%N)?access_token=$MATRIX_BOT_ACCESS_TOKEN"
+```
+Note the `$(date +%s-%N)` is used for the required unique txnId.
 
-## ValheimPlus config from Environment Variables
-ValheimPlus config can be specified in environment variables using the syntax `VPCFG_<section>_<variable>=<value>`.
+
+## Mod config from Environment Variables
+Mod config can be specified in environment variables using the syntax `<prefix>_<section>_<variable>=<value>`.
+
+**Predefined prefix list**
+| Prefix | Mod | File |
+|----------|----------|----------|
+| `VPCFG` | ValheimPlus | `/config/valheimplus/valheim_plus.cfg` |
+| `BEPINEXCFG` | BepInEx | `/config/valheimplus/BepInEx.cfg` or `/config/bepinex/BepInEx.cfg` depending on whether `VALHEIM_PLUS=true` or `BEPINEX=true` |
+
+
+**Translation table**  
+Some characters that are allowed as section names in the config files are not allowed as environment variable names. They can be encoded using the following translation table.
+| Variable name string | Replacement |
+|----------|----------|
+| `_DOT_` | `.` |
+| `_HYPHEN_` | `-` |
+| `_UNDERSCORE_` | `_` |
+| `_PLUS_` | `+` |
 
 Example:
 ```
--e VPCFG_Server_enabled=true -e VPCFG_Server_enforceMod=false -e VPCFG_Server_dataRate=500
+-e VALHEIM_PLUS=true \
+-e VPCFG_Server_enabled=true \
+-e VPCFG_Server_enforceMod=false \
+-e VPCFG_Server_dataRate=500 \
+-e BEPINEXCFG_Logging_DOT_Console_Enabled=true
 ```
 
-turns into
+turns into `/config/valheimplus/valheim_plus.cfg`
 ```
 [Server]
 enabled=true
 enforceMod=false
 dataRate=500
 ```
-All existing configuration in `/config/valheimplus/valheim_plus.cfg` is retained and a backup of the old config is created as `/config/valheimplus/valheim_plus.cfg.old` before writing the new config file.
+
+and `/config/valheimplus/BepInEx.cfg`
+```
+[Logging.Console]
+Enabled=true
+```
+
+All existing configuration in those files is retained and a backup of the old config is created as e.g. `/config/valheimplus/valheim_plus.cfg.old` before writing the new config file.
+
+You could generate your own custom plugin config from environment variables using [the `POST_BEPINEX_CONFIG_HOOK` event hook](#event-hooks) and [`env2cfg`](https://github.com/lloesche/valheim-server-docker/tree/main/env2cfg).
 
 
 # System requirements
@@ -294,6 +388,12 @@ helm install valheim-server valheim-k8s/valheim-k8s # see repo for full config
 CDK Project for spinning up a Valheim game server on AWS Using ECS Fargate and Amazon EFS is available here:
 [https://github.com/rileydakota/valheim-ecs-fargate-cdk](https://github.com/rileydakota/valheim-ecs-fargate-cdk)
 
+## Deploying to Nomad
+```
+$ sudo mkdir -p /var/lib/valheim/{config,data}
+$ sudo curl -o /var/lib/valheim/valheim.nomad https://raw.githubusercontent.com/lloesche/valheim-server-docker/main/valheim.nomad
+$ sudo nomad job run /var/lib/valheim/valheim.nomad
+```
 
 # Updates
 By default the container will check for Valheim server updates every 15 minutes if no players are currently connected to the server.
@@ -317,6 +417,30 @@ However the `worlds/` directory also contains a `.db.old` file for each world wh
 
 See [Copy backups to another location](#copy-backups-to-another-location) for an example of how to copy backups offsite.
 
+## Manual backup
+Sending `SIGHUP` to the `valheim-backup` service or restarting the service will create a backup.
+The PID of the running service can be found in `/var/run/valheim-backup.pid`
+
+Assuming your container's name is `valheim-server` here's how both would work:
+
+Sending SIGHUP using `supervisorctl` (the most graceful way of making a backup)
+```
+docker exec -it valheim-server supervisorctl signal HUP valheim-backup
+```
+
+Sending SIGHUP manually (as graceful as before but more "manual")
+```
+docker exec -it valheim-server bash -c 'kill -HUP $(< /var/run/valheim-backup.pid)'
+```
+
+Restarting `valheim-backup` (the more brute force way)
+```
+docker exec -it valheim-server supervisorctl restart valheim-backup
+```
+
+The restart can also be done from [the Supervisor web UI](#supervisor).
+![Backup Step 1](https://raw.githubusercontent.com/lloesche/valheim-server-docker/main/misc/backup1.png "Backup Step 1")
+
 
 # Finding Your Server
 Once the server is up and running and the log says something like
@@ -331,6 +455,17 @@ There are three ways of getting to your server. Either using the Steam server br
 When in-game, click on `Join Game` and select `Community`. Wait for the game to load the list of all 4000+ servers.
 Only 200 servers will be shown at a time so we will have to enter part of our server name to filter the view.
 ![in-game server browser](https://raw.githubusercontent.com/lloesche/valheim-server-docker/main/misc/find1.png "in-game server browser")
+
+### Joining Directly via Hostname/IP
+
+Valheim has since added the `Join IP` button to the `Join Game` tab. If you click the `Join IP` button, you are prompted to enter your server's IP address and port number.
+If you left the `SERVER_PORT` at its default value of `2456`, you do not have to enter the port. The hostname or IP of your server will suffice.
+If you changed the port, you have to specify it like this: `example.com:3333`.
+
+This method of connecting to your server will work even if your server is not public (i.e., you set `SERVER_PUBLIC` to `false`).
+
+![in-game server browser with join ip button](./misc/find5.png "in-game server browser with join ip button")
+![join ip dialog](./misc/find6.png "join ip dialog")
 
 ## Steam Server Browser
 When using the Steam server browser, in Steam go to `View -> Servers`. Click on `CHANGE FILTERS` and select Game `Valheim`.
@@ -365,6 +500,8 @@ Sometimes it also helps to press the `REFRESH` button and then immediately doubl
 
 Overall LAN play via the Steam Server Browser has been a bit hit and miss for me while online play using the in-game search has resulted in the most consistent success.
 
+NOTE 2: You will only find your Valheim game server using this method if your server is public (`SERVER_PUBLIC` is NOT set to `false`).
+If you started your server with `SERVER_PUBLIC` set to `false`, you will get the error message: `Server is not responding.` in the list where the servers are supposed to appear.
 
 # Admin Commands
 Upon startup the server will create a file `/config/adminlist.txt`. In it you can list the IDs of all administrator users.
@@ -388,7 +525,6 @@ The default `SUPERVISOR_HTTP_USER` is `admin` but can be changed to anything els
 
 ![Supervisor](https://raw.githubusercontent.com/lloesche/valheim-server-docker/main/misc/supervisor.png "Supervisor")
 
-Since log files are written to stdout/stderr they can not be viewed from within this interface. This is mainly useful for manual service restarts and health checking.
 
 ## Supervisor API
 If Supervisor's http server is enabled it also provides an XML-RPC API at `/RPC2`. Details can be found in [the official documentation](http://supervisord.org/api.html).
@@ -441,24 +577,46 @@ Within the container `status.json` is written to `STATUS_HTTP_HTDOCS` which by d
 
 As mentioned all the information is publicly available on the Valheim server query port. However the option is there to configure a `STATUS_HTTP_CONF` (`/config/httpd.conf` by default) containing [busybox httpd config](https://git.busybox.net/busybox/tree/networking/httpd.c) to limit access to the status web server by IP/subnet or login/password.
 
+# Modding
+## BepInExPack Valheim
+**Enable with**
+| Variable | Value |
+|----------|----------|
+| `BEPINEX` | `true` |
 
-# ValheimPlus
-[ValheimPlus](https://github.com/valheimPlus/ValheimPlus) is a popular Valheim mod.
-It has been incorporated into this container. To enable V+ provide the env variable `VALHEIM_PLUS=true`.
+[BepInExPack Valheim](https://valheim.thunderstore.io/package/denikson/BepInExPack_Valheim/) packages [BepInEx](https://github.com/BepInEx/BepInEx) for Valheim. BepInEx is a plugin / modding framework for Unity Mono, IL2CPP and .NET framework games.
+To enable BepInExPack provide the env variable `BEPINEX=true`. This can not be specified together with `VALHEIM_PLUS=true`.
+Just like Valheim Server this mod is automatically updated using the `UPDATE_CRON` schedule.
+
+Upon first start BepInExPack will create a new directory `/config/bepinex` where its config files are located.
+BepInEx plugins must be copied into the `/config/bepinex/plugins/` directory. From there they will be automatically copied into `/opt/valheim/bepinex/BepInEx/plugins/` on install/update.
+
+### Configuration
+See [Mod config from Environment Variables](#mod-config-from-environment-variables)
+
+
+## ValheimPlus
+**Enable with**
+| Variable | Value |
+|----------|----------|
+| `VALHEIM_PLUS` | `true` |
+
+[ValheimPlus](https://github.com/valheimPlus/ValheimPlus) is a popular Valheim mod based on BepInEx.
+It has been incorporated into this container. To enable V+ provide the env variable `VALHEIM_PLUS=true`. This can not be specified together with `BEPINEX=true`.
 Upon first start V+ will create a new directory `/config/valheimplus` where its config files are located.
 As a user you are mainly concerned with the values in `/config/valheimplus/valheim_plus.cfg`.
 For most modifications the mod has to be installed both, on the server as well as all the clients that connect to the server.
 A few modifications, like for example changing the `dataRate` can be done server only.
 
-## Updates
+### Updates
 ValheimPlus is automatically being updated using the same `UPDATE_CRON` schedule the Valheim server uses to check for updates. If an update of either
 Valheim server or ValheimPlus is found it is being downloaded, configured and the server automatically restarted.
 This also means your clients always need to run the latest ValheimPlus version or will not be able to connect. If this is undesired the schedule could be changed to only check for updates once per day. Example  `UPDATE_CRON='0 6 * * *'` would only check at 6 AM.
 
-## Configuration
-See [ValheimPlus config from Environment Variables](#valheimplus-config-from-environment-variables)
+### Configuration
+See [Mod config from Environment Variables](#mod-config-from-environment-variables)
 
-### Server data rate
+#### Server data rate
 A popular change is to increase the server send rate.
 
 To do so enable ValheimPlus (`VALHEIM_PLUS=true`) and configure the following section in `/config/valheimplus/valheim_plus.cfg`
@@ -472,7 +630,7 @@ dataRate=600
 
 Alternatively start with `-e VPCFG_Server_enabled=true -e VPCFG_Server_enforceMod=false -e VPCFG_Server_dataRate=600`.
 
-### Disable server password
+#### Disable server password
 Another popular mod for LAN play that does not require the clients to run ValheimPlus is to turn off password authentication.
 
 To do so enable ValheimPlus (`VALHEIM_PLUS=true`), set an empty password (`SERVER_PASS=""`), make the server non-public (`SERVER_PUBLIC=false`) and configure the following section in `/config/valheimplus/valheim_plus.cfg`
@@ -551,3 +709,72 @@ You will need to remove the container completely and perform the [First install]
 Make sure to use the same folder settings as before so the existing `/config` and `/opt/valheim` directories are used.
 
 The error is caused by Synology using the old image's `CMD` with the newly downloaded image. By removing the container and recreating it we're forcing Synology to use the new images `CMD`.
+
+# QNAP NAS Help
+## Creating container
+
+As a prerequisite you need to create a folder where you will keep yours saves, backups and configuration.
+
+Here is an example `docker-compose.yml` file that we will use in the next steps.
+```yaml
+version: "3"
+
+services: 
+  valheim: 
+    image: lloesche/valheim-server
+    cap_add:
+      - sys_nice
+    volumes: 
+      - /share/CACHEDEV1_DATA/{path_to_folder}/config:/config
+      - /share/CACHEDEV1_DATA/{path_to_folder}/data:/opt/valheim
+    ports: 
+      - "2456-2457:2456-2457/udp"
+      - "9001:9001/tcp"
+    env_file:
+      - /share/CACHEDEV1_DATA/{path_to_folder}/valheim.env
+    restart: always
+    stop_grace_period: 2m
+    deploy:
+      resources:
+        limits:
+          cpus: '0.70'
+          memory: 4gb
+```
+
+The most important part is `/share/CACHEDEV1_DATA/{path_to_folder}/config`. You need to replace **{path_to_folder}** with the folder path where you want to store data and configuration for your Valheim server.
+
+Change your memory and cpu limit according to your available resources on QNAP. Current settings are 70% of single CPU and 4gb of RAM.
+
+In this folder you need to create a file `valheim.env` to store configuration variables. 
+
+Example `valheim.env`:
+
+```
+SERVER_NAME=My Server
+WORLD_NAME=Dedicated
+SERVER_PASS=secret
+SERVER_PUBLIC=true
+```
+
+
+![Qnap Step 1](https://raw.githubusercontent.com/lloesche/valheim-server-docker/main/misc/qnap_create_button.png "Qnap Step 1")
+
+![Qnap Step 2](https://raw.githubusercontent.com/lloesche/valheim-server-docker/main/misc/qnap_create_application.png "Qnap Step 2")
+
+![Qnap Step 3](https://raw.githubusercontent.com/lloesche/valheim-server-docker/main/misc/qnap_create_yaml.png "Qnap Step 3")
+
+
+
+## Updating image
+
+![Qnap update Step 1](https://raw.githubusercontent.com/lloesche/valheim-server-docker/main/misc/qnap_update_resources.png "Qnap update Step 1")
+
+![Qnap update Step 2](https://raw.githubusercontent.com/lloesche/valheim-server-docker/main/misc/qnap_update_button.png "Qnap update Step 2")
+
+In the image name you have to specify the image from the container definition `lloesche/valheim-server`.
+
+![Qnap update Step 3](https://raw.githubusercontent.com/lloesche/valheim-server-docker/main/misc/qnap_update_pull.png "Qnap update Step 3")
+
+After the image is downloaded restart the container. As you can see the old image is now unused and the new one is in use by the container. You can now safely delete the old image.
+
+![Qnap update Step 4](https://raw.githubusercontent.com/lloesche/valheim-server-docker/main/misc/qnap_update_images.png "Qnap update Step 4")
